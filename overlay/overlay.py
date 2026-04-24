@@ -7,6 +7,8 @@ STS2 카드 추천 오버레이 (스크린 캡처 + OCR 버전)
 import sys
 import json
 import datetime
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 _LOG_PATH = Path(__file__).parent / "ocr_debug.log"
@@ -581,6 +583,12 @@ class OverlayWindow(QWidget):
         self._title_label = QLabel("STS2 추천")
         self._title_label.setStyleSheet(f"color:{GOLD};font-size:12px;font-weight:bold;")
         hdr.addWidget(self._title_label)
+
+        # 접힌 상태 상태 표시 (대기/감지)
+        self._dot_label = QLabel("● 대기")
+        self._dot_label.setStyleSheet(f"color:{TEXT_DIM};font-size:9px;")
+        self._dot_label.setVisible(True)
+        hdr.addWidget(self._dot_label)
         hdr.addStretch()
 
         # 접기/펼치기 버튼
@@ -666,7 +674,9 @@ class OverlayWindow(QWidget):
         root.addWidget(self._deck_wrap)
 
         self._selected_arch_id: str | None = None
-        self._panels_visible = True   # 패널 표시 상태
+        self._panels_visible = True
+        self._current_mode: str | None = None
+        self._last_valid_cards: list[str] = []  # 마지막으로 표시한 카드 목록
         self._refresh_arch()
 
         bridge.cards_ready.connect(self._on_cards)
@@ -676,6 +686,8 @@ class OverlayWindow(QWidget):
         screen = QApplication.primaryScreen().geometry()
         self.move(screen.width() - 270, 60)
         self._start_capture_loop()
+        # 시작 시 접힘 상태
+        self._set_panels_visible(False)
 
     # ── 유틸 ──────────────────────────────────────────────────────────────────
     def _load_deck(self) -> list[str]:
@@ -741,6 +753,7 @@ class OverlayWindow(QWidget):
         self._arch_wrap.setVisible(visible)
         self._deck_wrap.setVisible(visible)
         self._status_label.setVisible(visible)
+        self._dot_label.setVisible(not visible)  # 접힐 때만 상태 도트 표시
         self._toggle_btn.setText("▾" if visible else "▸")
         self.adjustSize()
 
@@ -748,6 +761,8 @@ class OverlayWindow(QWidget):
         self._set_panels_visible(not self._panels_visible)
 
     def _on_screen_gone(self):
+        self._current_mode = None
+        self._last_valid_cards = []
         while self._card_container.count():
             item = self._card_container.takeAt(0)
             if item.widget():
@@ -756,10 +771,12 @@ class OverlayWindow(QWidget):
         self._title_label.setText("STS2 추천")
         self._title_label.setStyleSheet(f"color:{GOLD};font-size:12px;font-weight:bold;")
         self._status_label.setText("카드 선택 대기 중...")
-        # 플레이 중엔 패널 자동 축소
+        self._dot_label.setStyleSheet(f"color:{TEXT_DIM};font-size:9px;")
+        self._dot_label.setText("● 대기")
         self._set_panels_visible(False)
 
     def _start_capture_loop(self):
+        self._claude_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="claude")
         self._loop = CaptureLoop(
             on_cards_detected=self._ocr_callback,
             on_screen_gone=lambda: bridge.screen_gone.emit(),
@@ -767,46 +784,74 @@ class OverlayWindow(QWidget):
         self._loop.start()
 
     def _ocr_callback(self, candidates_list: list[list[str]], mode: str = "reward"):
+        self._current_mode = mode
+        # 카드 화면 감지됨 → 도트 녹색으로
+        bridge.status_update.emit("__dot_active__")
+
         char = self.engine._current_char(self.current_deck)
         results = self.matcher.match_many_candidates(candidates_list, char=char)
-        # results: list of (name, score)
-
-        # Claude API 폴백: None이거나 낮은 신뢰도(< 75) 영역 재시도
-        if claude_ocr.is_enabled():
-            regions = (
-                self._screen.config.card_regions if mode == "reward"
-                else self._screen.config.shop_card_regions
-            )
-            for i, (name, score) in enumerate(results):
-                if (name is None or score < 75) and i < len(regions):
-                    img = self._screen.capture_region(regions[i])
-                    from PIL import Image
-                    h, w = img.shape[:2]
-                    # 마나 비용 배지(왼쪽 ~22%) 제외, 이름 리본만 크롭
-                    crop = img[int(h*0.12):int(h*0.68), int(w*0.22):int(w*0.95)]
-                    img_pil = Image.fromarray(crop[:, :, :3][:, :, ::-1])
-                    img_pil.save(Path(__file__).parent / f"debug_claude_{i}.png")
-                    claude_text = claude_ocr.ocr_card_image(img_pil, char=char)
-                    _log(f"[Claude raw] 영역{i}: {repr(claude_text)}")
-                    if claude_text and not claude_text.startswith(("죄송", "모름", "알 수", "이미지", "제시")):
-                        fallback, fscore = self.matcher.match_best_from_candidates(
-                            [claude_text], char=char)
-                        if fallback:
-                            results[i] = (fallback, fscore)
-                            _log(f"[Claude] 영역{i}: {repr(claude_text)} -> {fallback} ({fscore})")
 
         label = "보상" if mode == "reward" else "상점"
         for i, (cands, (name, score)) in enumerate(zip(candidates_list, results)):
-            ocr_text = cands[0] if cands else ""
-            _log(f"[{label}] 영역{i}: OCR={repr(ocr_text)} -> {repr(name)} ({score})")
+            _log(f"[{label}] 영역{i}: OCR={repr(cands[0] if cands else '')} -> {repr(name)} ({score})")
 
         valid = [name for name, _ in results if name is not None]
         preview = [cands[0] if cands else "" for cands in candidates_list]
         bridge.status_update.emit(f"[{label}] {' / '.join(t for t in preview if t)}")
-        if valid:
+        # 매칭된 카드가 이전과 동일하면 UI 재렌더링 스킵 (OCR 노이즈로 인한 깜박임 방지)
+        if valid and valid != self._last_valid_cards:
+            self._last_valid_cards = valid
             bridge.cards_ready.emit(valid, mode)
 
+        # Claude 폴백: 별도 스레드에서 실행 (OCR 루프 블로킹 방지)
+        if claude_ocr.is_enabled():
+            failed = [
+                i for i, (name, score) in enumerate(results)
+                if (name is None or score < 75)
+            ]
+            if failed:
+                regions = (
+                    self._screen.config.card_regions if mode == "reward"
+                    else self._screen.config.shop_card_regions
+                )
+                # 이미지 미리 캡처 (메인 캡처 루프와 충돌 방지)
+                imgs = {}
+                for i in failed:
+                    if i < len(regions):
+                        imgs[i] = self._screen.capture_region(regions[i])
+                self._claude_executor.submit(
+                    self._claude_fallback, imgs, results, char, mode, label
+                )
+
+    def _claude_fallback(self, imgs: dict, results: list, char, mode: str, label: str):
+        from PIL import Image
+        updated = False
+        for i, img in imgs.items():
+            h, w = img.shape[:2]
+            crop = img[int(h*0.12):int(h*0.68), int(w*0.22):int(w*0.95)]
+            img_pil = Image.fromarray(crop[:, :, :3][:, :, ::-1])
+            img_pil.save(Path(__file__).parent / f"debug_claude_{i}.png")
+            claude_text = claude_ocr.ocr_card_image(img_pil, char=char)
+            _log(f"[Claude raw] 영역{i}: {repr(claude_text)}")
+            if claude_text and not claude_text.startswith(("죄송", "모름", "알 수", "이미지", "제시")):
+                fallback, fscore = self.matcher.match_best_from_candidates(
+                    [claude_text], char=char)
+                if fallback:
+                    results[i] = (fallback, fscore)
+                    _log(f"[Claude] 영역{i}: {repr(claude_text)} -> {fallback} ({fscore})")
+                    updated = True
+
+        if updated and self._current_mode == mode:
+            valid = [name for name, _ in results if name is not None]
+            if valid:
+                self._last_valid_cards = valid  # Claude 수정 결과도 기준점 갱신
+                bridge.cards_ready.emit(valid, mode)
+
     def _on_status(self, msg: str):
+        if msg == "__dot_active__":
+            self._dot_label.setStyleSheet("color:#2ecc71;font-size:9px;")
+            self._dot_label.setText("● 감지")
+            return
         self._status_label.setText(msg)
 
     def _on_cards(self, offered: list[str], mode: str = "reward"):
