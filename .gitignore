@@ -1,0 +1,28 @@
+# 가상환경
+overlay/venv*/
+venv*/
+
+# 런타임 파일
+overlay/deck.json
+overlay/ocr_debug.log
+overlay/debug_*.png
+
+# API 키 (절대 커밋하지 말 것)
+overlay/.api_key
+.api_key
+
+# Python 캐시
+__pycache__/
+*.pyc
+*.pyo
+
+# 개발용 스크립트
+overlay/debug_*.py
+overlay/debug_shop_crop*.png
+overlay/debug_shop_card*.png
+overlay/debug_card*.png
+
+# 기타
+*.egg-info/
+dist/
+build/

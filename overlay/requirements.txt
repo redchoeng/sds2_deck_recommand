@@ -1,0 +1,11 @@
+PyQt6>=6.4.0
+mss>=9.0.0
+rapidfuzz>=3.0.0
+numpy>=1.24.0
+Pillow>=9.0.0
+anthropic>=0.20.0
+winrt-Windows.Media.Ocr
+winrt-Windows.Graphics.Imaging
+winrt-Windows.Storage.Streams
+winrt-Windows.Globalization
+winrt-Windows.Foundation

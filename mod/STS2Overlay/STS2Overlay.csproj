@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net6.0</TargetFramework>
+    <AssemblyName>STS2Overlay</AssemblyName>
+    <Nullable>enable</Nullable>
+    <!-- STS2 게임 설치 경로 - 본인 경로로 수정 -->
+    <GamePath>C:\Program Files (x86)\Steam\steamapps\common\Slay the Spire 2</GamePath>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- BepInEx 참조 -->
+    <Reference Include="BepInEx">
+      <HintPath>$(GamePath)\BepInEx\core\BepInEx.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="0Harmony">
+      <HintPath>$(GamePath)\BepInEx\core\0Harmony.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <!-- 게임 어셈블리 (디컴파일 후 클래스명 확인용) -->
+    <Reference Include="Assembly-CSharp">
+      <HintPath>$(GamePath)\SlayTheSpire2_Data\Managed\Assembly-CSharp.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine">
+      <HintPath>$(GamePath)\SlayTheSpire2_Data\Managed\UnityEngine.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.CoreModule">
+      <HintPath>$(GamePath)\SlayTheSpire2_Data\Managed\UnityEngine.CoreModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+  </ItemGroup>
+</Project>
