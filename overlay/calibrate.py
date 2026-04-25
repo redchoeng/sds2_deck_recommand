@@ -87,14 +87,30 @@ class CalibrateWindow(QWidget):
 
         self._screenshot = None
         self._scale = 1.0
+        self._monitor_offset = (0, 0)
 
         self._build_ui()
         QTimer.singleShot(3000, self._delayed_screenshot)
 
     def _take_screenshot(self) -> Image.Image:
+        from capture import _find_game_hwnd, _get_client_screen_rect
         with mss.mss() as sct:
-            shot = sct.grab(sct.monitors[0])
+            # 게임 창이 있는 모니터만 캡처 (듀얼 모니터 대응)
+            mon = sct.monitors[0]  # 기본값: 전체 화면
+            hwnd = _find_game_hwnd()
+            if hwnd:
+                rect = _get_client_screen_rect(hwnd)
+                if rect:
+                    cx, cy, cw, ch = rect
+                    for m in sct.monitors[1:]:
+                        ox = max(0, min(cx + cw, m["left"] + m["width"]) - max(cx, m["left"]))
+                        oy = max(0, min(cy + ch, m["top"] + m["height"]) - max(cy, m["top"]))
+                        if ox * oy > 0:
+                            mon = m
+                            break
+            shot = sct.grab(mon)
             arr = np.array(shot)
+        self._monitor_offset = (mon["left"], mon["top"])
         return Image.fromarray(arr[:, :, :3][:, :, ::-1])
 
     def _build_ui(self):
@@ -197,7 +213,8 @@ class CalibrateWindow(QWidget):
         x = int(e.pos().x() / self._scale)
         y = int(e.pos().y() / self._scale)
         r, g, b = self._screenshot.getpixel((x, y))
-        self.detect_pixel = {"x": x, "y": y, "r": r, "g": g, "b": b, "tolerance": 25}
+        ox, oy = self._monitor_offset
+        self.detect_pixel = {"x": ox + x, "y": oy + y, "r": r, "g": g, "b": b, "tolerance": 25}
         self._phase = "done"
         self._save_btn.setEnabled(True)
         self._update_status()
@@ -244,11 +261,12 @@ class CalibrateWindow(QWidget):
 
     def _save(self):
         scale = self._scale
+        ox, oy = self._monitor_offset
         card_regions = []
         for rect in self.regions:
             card_regions.append(Region(
-                x=int(rect.x() / scale),
-                y=int(rect.y() / scale),
+                x=ox + int(rect.x() / scale),
+                y=oy + int(rect.y() / scale),
                 w=int(rect.width() / scale),
                 h=int(rect.height() / scale),
             ))

@@ -126,9 +126,11 @@ class ScreenCapture:
         self._reader_lock = threading.Lock()
         self._game_hwnd: int | None = None   # HWND 캐시
         with mss.mss() as sct:
-            mon = sct.monitors[0]
-            self._screen_w = mon["width"]
-            self._screen_h = mon["height"]
+            # monitors[0]은 전체 가상 화면, [1:]이 개별 모니터
+            self._monitors = [
+                (m["left"], m["top"], m["width"], m["height"])
+                for m in sct.monitors[1:]
+            ] or [(0, 0, sct.monitors[0]["width"], sct.monitors[0]["height"])]
         # 전용 이벤트 루프 (asyncio.run() 반복 생성 오버헤드 제거)
         self._loop = asyncio.new_event_loop()
         self._loop_thread = threading.Thread(target=self._loop.run_forever, daemon=True)
@@ -157,8 +159,19 @@ class ScreenCapture:
         self._game_hwnd = _find_game_hwnd()
         return self._game_hwnd
 
+    def _find_monitor(self, cx: int, cy: int, cw: int, ch: int) -> tuple[int, int, int, int]:
+        """게임 창과 가장 많이 겹치는 모니터 반환 (mx, my, mw, mh)"""
+        best, best_overlap = self._monitors[0], 0
+        for mx, my, mw, mh in self._monitors:
+            ox = max(0, min(cx + cw, mx + mw) - max(cx, mx))
+            oy = max(0, min(cy + ch, my + mh) - max(cy, my))
+            if (overlap := ox * oy) > best_overlap:
+                best_overlap = overlap
+                best = (mx, my, mw, mh)
+        return best
+
     def _get_window_transform(self) -> tuple[float, float, int, int] | None:
-        """(sx, sy, cx, cy): 풀스크린 기준 좌표를 현재 창 좌표로 변환하는 스케일+오프셋.
+        """(sx, sy, cx, cy): 게임 창이 속한 모니터 기준으로 창모드 보정값 반환.
         풀스크린이면 None 반환."""
         hwnd = self._get_game_hwnd()
         if not hwnd:
@@ -167,9 +180,10 @@ class ScreenCapture:
         if not cur:
             return None
         cx, cy, cw, ch = cur
-        if cx == 0 and cy == 0 and cw == self._screen_w and ch == self._screen_h:
-            return None  # 풀스크린 — 보정 불필요
-        return cw / self._screen_w, ch / self._screen_h, cx, cy
+        mx, my, mw, mh = self._find_monitor(cx, cy, cw, ch)
+        if cx == mx and cy == my and cw == mw and ch == mh:
+            return None  # 해당 모니터에서 풀스크린 — 보정 불필요
+        return cw / mw, ch / mh, cx, cy
 
     def _adjust_region(self, region: Region) -> Region:
         t = self._get_window_transform()
