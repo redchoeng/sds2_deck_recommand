@@ -377,9 +377,21 @@ class CaptureLoop:
         self._running = False
 
     def _loop(self):
+        _dbg_path = Path(__file__).parent / "ocr_debug.log"
+        _dbg_count = 0
         while self._running:
             try:
                 mode = self.capture.screen_mode()
+                _dbg_count += 1
+                if _dbg_count % 10 == 1:  # 15초마다 상태 기록
+                    fg = _foreground_window_title()
+                    dp = self.capture.config.detect_pixel
+                    _dbg_path.open("a", encoding="utf-8").write(
+                        f"{__import__('datetime').datetime.now().strftime('%H:%M:%S')} "
+                        f"[DEBUG] fg={repr(fg[:40])} mode={repr(mode)} "
+                        f"dp={'있음' if dp else '없음'} "
+                        f"monitors={self.capture._monitors}\n"
+                    )
                 if mode is None:
                     # 게임 비포그라운드 → 상태 보존, 아무 것도 안 함
                     pass
