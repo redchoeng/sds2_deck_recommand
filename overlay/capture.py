@@ -94,8 +94,6 @@ class CaptureConfig:
     shop_card_regions: list[Region] = field(default_factory=list)
     shop_detect_pixel: dict = field(default_factory=dict)
     poll_interval: float = 0.8
-    calibration_window: dict = field(default_factory=dict)  # 캘리브레이션 당시 게임 창 {x,y,w,h}
-
     def save(self):
         data = {
             "card_regions": [{"x":r.x,"y":r.y,"w":r.w,"h":r.h} for r in self.card_regions],
@@ -103,7 +101,6 @@ class CaptureConfig:
             "shop_card_regions": [{"x":r.x,"y":r.y,"w":r.w,"h":r.h} for r in self.shop_card_regions],
             "shop_detect_pixel": self.shop_detect_pixel,
             "poll_interval": self.poll_interval,
-            "calibration_window": self.calibration_window,
         }
         CONFIG_PATH.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
@@ -118,7 +115,6 @@ class CaptureConfig:
         cfg.shop_card_regions = [Region(**r) for r in data.get("shop_card_regions", [])]
         cfg.shop_detect_pixel = data.get("shop_detect_pixel", {})
         cfg.poll_interval = data.get("poll_interval", 0.8)
-        cfg.calibration_window = data.get("calibration_window", {})
         return cfg
 
 
@@ -129,6 +125,10 @@ class ScreenCapture:
         self._reader = None          # easyocr fallback
         self._reader_lock = threading.Lock()
         self._game_hwnd: int | None = None   # HWND 캐시
+        with mss.mss() as sct:
+            mon = sct.monitors[0]
+            self._screen_w = mon["width"]
+            self._screen_h = mon["height"]
         # 전용 이벤트 루프 (asyncio.run() 반복 생성 오버헤드 제거)
         self._loop = asyncio.new_event_loop()
         self._loop_thread = threading.Thread(target=self._loop.run_forever, daemon=True)
@@ -157,48 +157,40 @@ class ScreenCapture:
         self._game_hwnd = _find_game_hwnd()
         return self._game_hwnd
 
-    def _adjust_region(self, region: Region) -> Region:
-        """캘리브레이션 좌표를 현재 게임 창 위치/크기에 맞게 변환"""
-        cal = self.config.calibration_window
-        if not cal:
-            return region
+    def _get_window_transform(self) -> tuple[float, float, int, int] | None:
+        """(sx, sy, cx, cy): 풀스크린 기준 좌표를 현재 창 좌표로 변환하는 스케일+오프셋.
+        풀스크린이면 None 반환."""
         hwnd = self._get_game_hwnd()
         if not hwnd:
-            return region
+            return None
         cur = _get_client_screen_rect(hwnd)
         if not cur:
-            return region
+            return None
         cx, cy, cw, ch = cur
-        if cal["x"] == cx and cal["y"] == cy and cal["w"] == cw and cal["h"] == ch:
+        if cx == 0 and cy == 0 and cw == self._screen_w and ch == self._screen_h:
+            return None  # 풀스크린 — 보정 불필요
+        return cw / self._screen_w, ch / self._screen_h, cx, cy
+
+    def _adjust_region(self, region: Region) -> Region:
+        t = self._get_window_transform()
+        if t is None:
             return region
-        sx = cw / cal["w"]
-        sy = ch / cal["h"]
+        sx, sy, cx, cy = t
         return Region(
-            x=cx + int((region.x - cal["x"]) * sx),
-            y=cy + int((region.y - cal["y"]) * sy),
+            x=cx + int(region.x * sx),
+            y=cy + int(region.y * sy),
             w=max(1, int(region.w * sx)),
             h=max(1, int(region.h * sy)),
         )
 
     def _adjust_pixel(self, dp: dict) -> dict:
-        """감지 픽셀 좌표를 현재 게임 창 위치/크기에 맞게 변환"""
-        cal = self.config.calibration_window
-        if not cal or not dp:
+        if not dp:
             return dp
-        hwnd = self._get_game_hwnd()
-        if not hwnd:
+        t = self._get_window_transform()
+        if t is None:
             return dp
-        cur = _get_client_screen_rect(hwnd)
-        if not cur:
-            return dp
-        cx, cy, cw, ch = cur
-        if cal["x"] == cx and cal["y"] == cy and cal["w"] == cw and cal["h"] == ch:
-            return dp
-        sx = cw / cal["w"]
-        sy = ch / cal["h"]
-        return {**dp,
-                "x": cx + int((dp["x"] - cal["x"]) * sx),
-                "y": cy + int((dp["y"] - cal["y"]) * sy)}
+        sx, sy, cx, cy = t
+        return {**dp, "x": cx + int(dp["x"] * sx), "y": cy + int(dp["y"] * sy)}
 
     def capture_region(self, region: Region) -> np.ndarray:
         with mss.mss() as sct:
