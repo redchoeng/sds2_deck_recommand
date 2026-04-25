@@ -19,7 +19,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QRect, QPoint, QSize, QTimer, pyqtSignal
 from PyQt6.QtGui import QPixmap, QPainter, QPen, QColor, QFont
 
-from capture import CaptureConfig, Region
+from capture import CaptureConfig, Region, _find_game_hwnd, _get_client_screen_rect
 
 CONFIG_PATH = Path(__file__).parent / "capture_config.json"
 
@@ -87,6 +87,7 @@ class CalibrateWindow(QWidget):
 
         self._screenshot = None
         self._scale = 1.0
+        self._game_rect: dict = {}
 
         self._build_ui()
         QTimer.singleShot(3000, self._delayed_screenshot)
@@ -131,6 +132,12 @@ class CalibrateWindow(QWidget):
         layout.addLayout(btn_row)
 
     def _delayed_screenshot(self):
+        hwnd = _find_game_hwnd()
+        if hwnd:
+            rect = _get_client_screen_rect(hwnd)
+            if rect:
+                x, y, w, h = rect
+                self._game_rect = {"x": x, "y": y, "w": w, "h": h}
         self._screenshot = self._take_screenshot()
 
         screen = QApplication.primaryScreen().geometry()
@@ -259,6 +266,8 @@ class CalibrateWindow(QWidget):
         else:
             cfg.shop_card_regions = card_regions
             cfg.shop_detect_pixel = self.detect_pixel
+        if self._game_rect:
+            cfg.calibration_window = self._game_rect
         cfg.save()
         mode_text = "보상 카드" if self._mode == "reward" else "상점"
         QMessageBox.information(self, "저장 완료",

@@ -47,6 +47,36 @@ def _is_game_foreground() -> bool:
     title = _foreground_window_title().lower()
     return any(hint in title for hint in _ALLOWED_FOREGROUND)
 
+_EnumWindowsProc = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_long)
+
+def _find_game_hwnd() -> int | None:
+    """게임 창 HWND 탐색 (타이틀에 'slay' 포함, 가시 창만)"""
+    found = []
+    def _cb(hwnd, _):
+        if not ctypes.windll.user32.IsWindowVisible(hwnd):
+            return True
+        n = ctypes.windll.user32.GetWindowTextLengthW(hwnd)
+        if n > 0:
+            buf = ctypes.create_unicode_buffer(n + 1)
+            ctypes.windll.user32.GetWindowTextW(hwnd, buf, n + 1)
+            if "slay" in buf.value.lower():
+                found.append(hwnd)
+        return True
+    ctypes.windll.user32.EnumWindows(_EnumWindowsProc(_cb), 0)
+    return found[0] if found else None
+
+def _get_client_screen_rect(hwnd: int) -> tuple[int, int, int, int] | None:
+    """게임 클라이언트 영역 화면 좌표 반환 (x, y, w, h) — 타이틀바·테두리 제외"""
+    import ctypes.wintypes
+    pt = ctypes.wintypes.POINT(0, 0)
+    ctypes.windll.user32.ClientToScreen(hwnd, ctypes.byref(pt))
+    cr = ctypes.wintypes.RECT()
+    ctypes.windll.user32.GetClientRect(hwnd, ctypes.byref(cr))
+    w, h = cr.right - cr.left, cr.bottom - cr.top
+    if w <= 0 or h <= 0:
+        return None
+    return pt.x, pt.y, w, h
+
 @dataclass
 class Region:
     x: int
@@ -64,6 +94,7 @@ class CaptureConfig:
     shop_card_regions: list[Region] = field(default_factory=list)
     shop_detect_pixel: dict = field(default_factory=dict)
     poll_interval: float = 0.8
+    calibration_window: dict = field(default_factory=dict)  # 캘리브레이션 당시 게임 창 {x,y,w,h}
 
     def save(self):
         data = {
@@ -72,6 +103,7 @@ class CaptureConfig:
             "shop_card_regions": [{"x":r.x,"y":r.y,"w":r.w,"h":r.h} for r in self.shop_card_regions],
             "shop_detect_pixel": self.shop_detect_pixel,
             "poll_interval": self.poll_interval,
+            "calibration_window": self.calibration_window,
         }
         CONFIG_PATH.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
@@ -86,6 +118,7 @@ class CaptureConfig:
         cfg.shop_card_regions = [Region(**r) for r in data.get("shop_card_regions", [])]
         cfg.shop_detect_pixel = data.get("shop_detect_pixel", {})
         cfg.poll_interval = data.get("poll_interval", 0.8)
+        cfg.calibration_window = data.get("calibration_window", {})
         return cfg
 
 
@@ -95,6 +128,7 @@ class ScreenCapture:
         self._winocr_engine = None
         self._reader = None          # easyocr fallback
         self._reader_lock = threading.Lock()
+        self._game_hwnd: int | None = None   # HWND 캐시
         # 전용 이벤트 루프 (asyncio.run() 반복 생성 오버헤드 제거)
         self._loop = asyncio.new_event_loop()
         self._loop_thread = threading.Thread(target=self._loop.run_forever, daemon=True)
@@ -116,15 +150,66 @@ class ScreenCapture:
                     self._reader = easyocr.Reader(["ko", "en"], gpu=False, verbose=False)
         return self._reader
 
+    def _get_game_hwnd(self) -> int | None:
+        """HWND 캐시 — 창이 닫혔으면 재탐색"""
+        if self._game_hwnd and ctypes.windll.user32.IsWindow(self._game_hwnd):
+            return self._game_hwnd
+        self._game_hwnd = _find_game_hwnd()
+        return self._game_hwnd
+
+    def _adjust_region(self, region: Region) -> Region:
+        """캘리브레이션 좌표를 현재 게임 창 위치/크기에 맞게 변환"""
+        cal = self.config.calibration_window
+        if not cal:
+            return region
+        hwnd = self._get_game_hwnd()
+        if not hwnd:
+            return region
+        cur = _get_client_screen_rect(hwnd)
+        if not cur:
+            return region
+        cx, cy, cw, ch = cur
+        if cal["x"] == cx and cal["y"] == cy and cal["w"] == cw and cal["h"] == ch:
+            return region
+        sx = cw / cal["w"]
+        sy = ch / cal["h"]
+        return Region(
+            x=cx + int((region.x - cal["x"]) * sx),
+            y=cy + int((region.y - cal["y"]) * sy),
+            w=max(1, int(region.w * sx)),
+            h=max(1, int(region.h * sy)),
+        )
+
+    def _adjust_pixel(self, dp: dict) -> dict:
+        """감지 픽셀 좌표를 현재 게임 창 위치/크기에 맞게 변환"""
+        cal = self.config.calibration_window
+        if not cal or not dp:
+            return dp
+        hwnd = self._get_game_hwnd()
+        if not hwnd:
+            return dp
+        cur = _get_client_screen_rect(hwnd)
+        if not cur:
+            return dp
+        cx, cy, cw, ch = cur
+        if cal["x"] == cx and cal["y"] == cy and cal["w"] == cw and cal["h"] == ch:
+            return dp
+        sx = cw / cal["w"]
+        sy = ch / cal["h"]
+        return {**dp,
+                "x": cx + int((dp["x"] - cal["x"]) * sx),
+                "y": cy + int((dp["y"] - cal["y"]) * sy)}
+
     def capture_region(self, region: Region) -> np.ndarray:
         with mss.mss() as sct:
-            shot = sct.grab(region.to_mss())
+            shot = sct.grab(self._adjust_region(region).to_mss())
             return np.array(shot)
 
     def capture_regions(self, regions: list[Region]) -> list[np.ndarray]:
         """여러 영역을 mss 컨텍스트 하나로 한 번에 캡처 (오버헤드 절감)"""
+        adjusted = [self._adjust_region(r) for r in regions]
         with mss.mss() as sct:
-            return [np.array(sct.grab(r.to_mss())) for r in regions]
+            return [np.array(sct.grab(r.to_mss())) for r in adjusted]
 
     def capture_full(self) -> np.ndarray:
         with mss.mss() as sct:
@@ -134,12 +219,13 @@ class ScreenCapture:
     def _check_pixel(self, dp: dict) -> bool:
         if not dp:
             return False
+        adj = self._adjust_pixel(dp)
         with mss.mss() as sct:
-            region = {"left": dp["x"], "top": dp["y"], "width": 1, "height": 1}
+            region = {"left": adj["x"], "top": adj["y"], "width": 1, "height": 1}
             pixel = np.array(sct.grab(region))[0][0]
             r, g, b = int(pixel[2]), int(pixel[1]), int(pixel[0])
-            tol = dp.get("tolerance", 20)
-            return (abs(r-dp["r"])<=tol and abs(g-dp["g"])<=tol and abs(b-dp["b"])<=tol)
+            tol = adj.get("tolerance", 20)
+            return (abs(r-adj["r"])<=tol and abs(g-adj["g"])<=tol and abs(b-adj["b"])<=tol)
 
     def is_reward_screen_visible(self) -> bool:
         return self._check_pixel(self.config.detect_pixel)
