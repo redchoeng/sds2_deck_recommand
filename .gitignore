@@ -4,6 +4,7 @@ venv*/
 
 # 런타임 파일
 overlay/deck.json
+overlay/capture_config.json
 overlay/ocr_debug.log
 overlay/debug_*.png
 
