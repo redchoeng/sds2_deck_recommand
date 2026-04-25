@@ -290,6 +290,8 @@ class ScreenCapture:
         # 카드명 리본 크롭 (마나 배지 제외: w*0.20~, 이름 리본 h 20-65%)
         crop = img[int(h*0.20):int(h*0.65), int(w*0.20):int(w*0.95)]
         img_pil = Image.fromarray(crop[:, :, :3][:, :, ::-1])
+        if img_pil.width < 200:
+            img_pil = img_pil.resize((img_pil.width * 2, img_pil.height * 2), Image.LANCZOS)
 
         if _WINRT_OK:
             # 전략 1: Windows OCR 원본 (자체 전처리)

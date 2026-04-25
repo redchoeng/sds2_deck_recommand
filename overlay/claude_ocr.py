@@ -50,10 +50,10 @@ def ocr_card_image(img_pil, char: str | None = None) -> str:
             char_hint = f"현재 캐릭터는 {_CHAR_KO[char]}입니다. "
 
         prompt = (
-            "이 이미지는 Slay the Spire 2 게임의 이름 리본입니다. "
+            "이 이미지는 Slay the Spire 2 게임의 카드 이름 리본입니다. "
             f"{char_hint}"
-            "장식체 폰트로 쓰인 한글 이름을 정확히 읽어주세요. "
-            "이름만 출력하고, 읽을 수 없으면 '모름'만 출력하세요."
+            "장식체 한글 폰트로 쓰인 카드 이름만 출력하세요. "
+            "설명·영어·괄호 금지. 읽을 수 없으면 '모름'만 출력하세요."
         )
 
         msg = _client.messages.create(
@@ -68,8 +68,16 @@ def ocr_card_image(img_pil, char: str | None = None) -> str:
                 ],
             }],
         )
-        result = msg.content[0].text.strip().strip("*").strip()
-        return "" if result == "모름" else result
+        raw = msg.content[0].text
+        # 여러 줄 출력 시 한국어가 포함된 마지막 줄만 추출
+        import re
+        korean_lines = [
+            l.strip().strip("*").strip()
+            for l in raw.split("\n")
+            if re.search(r"[가-힣]", l) and "(" not in l and len(l.strip()) <= 20
+        ]
+        result = korean_lines[-1] if korean_lines else raw.split("\n")[0].strip().strip("*").strip()
+        return "" if result in ("모름", "") else result
     except Exception as e:
         print(f"[ClaudeOCR] 오류: {e}")
         return ""

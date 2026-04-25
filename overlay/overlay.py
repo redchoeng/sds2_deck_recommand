@@ -828,8 +828,10 @@ class OverlayWindow(QWidget):
         updated = False
         for i, img in imgs.items():
             h, w = img.shape[:2]
-            crop = img[int(h*0.12):int(h*0.68), int(w*0.22):int(w*0.95)]
+            crop = img[int(h*0.12):int(h*0.68), int(w*0.10):int(w*0.95)]
             img_pil = Image.fromarray(crop[:, :, :3][:, :, ::-1])
+            if img_pil.width < 200:
+                img_pil = img_pil.resize((img_pil.width * 2, img_pil.height * 2), Image.LANCZOS)
             img_pil.save(Path(__file__).parent / f"debug_claude_{i}.png")
             claude_text = claude_ocr.ocr_card_image(img_pil, char=char)
             _log(f"[Claude raw] 영역{i}: {repr(claude_text)}")
