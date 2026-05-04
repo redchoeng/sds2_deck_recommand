@@ -640,12 +640,18 @@ class OverlayWindow(QWidget):
         claude_ocr.init()                    # .api_key 파일 또는 환경변수 자동 로드
         self.current_deck: list[str] = self._load_deck()
 
-        # Gemini 전투 분석 초기화
+        # Gemini 초기화
         self._gemini_ready = False
         try:
             import gemini_client
             import combat_recommender
-            gemini_client.init()
+            try:
+                gemini_client.init()
+            except FileNotFoundError:
+                key = self._ask_api_key()
+                if key:
+                    gemini_client.init(api_key=key)
+                    gemini_client.API_KEY_FILE.write_text(key)
             combat_recommender.set_engine(self.engine)
             self._gemini_ready = True
         except Exception as e:
@@ -1029,6 +1035,15 @@ class OverlayWindow(QWidget):
             self._save_deck()
             self._deck_panel.update_deck(self.current_deck)
             self._refresh_arch()
+
+    def _ask_api_key(self) -> str | None:
+        from PyQt6.QtWidgets import QInputDialog, QLineEdit
+        key, ok = QInputDialog.getText(
+            self, "Gemini API 키 입력",
+            "Google AI Studio에서 발급한 API 키를 입력하세요:",
+            QLineEdit.EchoMode.Normal
+        )
+        return key.strip() if ok and key.strip() else None
 
     def _trigger_card_analysis(self):
         if not self._gemini_ready:

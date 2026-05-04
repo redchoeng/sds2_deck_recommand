@@ -21,10 +21,10 @@ def init(api_key: str = None):
 
 def _load_api_key() -> str:
     if API_KEY_FILE.exists():
-        return API_KEY_FILE.read_text().strip()
-    key = input("Gemini API 키를 입력하세요: ").strip()
-    (_HERE / ".api_key").write_text(key)
-    return key
+        key = API_KEY_FILE.read_text().strip()
+        if key:
+            return key
+    raise FileNotFoundError("Gemini API 키 없음")
 
 
 def is_ready() -> bool:
