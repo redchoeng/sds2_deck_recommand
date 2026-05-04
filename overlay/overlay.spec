@@ -1,26 +1,46 @@
 # -*- mode: python ; coding: utf-8 -*-
-from PyInstaller.utils.hooks import collect_all
 
 datas = [
     ('cards.json', '.'),
 ]
+
 hiddenimports = [
+    # 로컬 모듈 (함수 내 동적 import 포함)
+    'engine',
+    'matcher',
+    'capture',
+    'claude_ocr',
+    'gemini_client',
+    'card_parser',
+    'state_parser',
+    'combat_recommender',
+    # winrt OCR
     'winrt.windows.media.ocr',
     'winrt.windows.graphics.imaging',
     'winrt.windows.storage.streams',
     'winrt.windows.globalization',
     'winrt.windows.foundation',
+    # Gemini
     'google.genai',
+    'google.genai.types',
     'google.auth',
+    'google.auth.transport.requests',
+    # 기타
     'PIL',
+    'PIL.Image',
+    'PIL.ImageEnhance',
+    'PIL.ImageFilter',
     'mss',
     'rapidfuzz',
+    'rapidfuzz.fuzz',
+    'rapidfuzz.process',
     'anthropic',
+    'numpy',
 ]
 
 a = Analysis(
     ['overlay.py'],
-    pathex=[],
+    pathex=['.'],
     binaries=[],
     datas=datas,
     hiddenimports=hiddenimports,
@@ -28,9 +48,10 @@ a = Analysis(
     hooksconfig={},
     runtime_hooks=[],
     excludes=[
+        'easyocr',
         'torch', 'torchvision', 'torchaudio',
         'scipy', 'sklearn', 'matplotlib',
-        'pandas', 'numpy.testing', 'notebook',
+        'pandas', 'notebook',
         'IPython', 'jupyter', 'tensorflow',
         'cv2', 'tkinter', 'wx',
     ],

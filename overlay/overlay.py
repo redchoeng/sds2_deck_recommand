@@ -762,7 +762,7 @@ class OverlayWindow(QWidget):
         cw_layout = QVBoxLayout(self._combat_wrap)
         cw_layout.setContentsMargins(6, 2, 6, 2)
         self._combat_panel = CombatPanel()
-        self._combat_panel.refresh_clicked.connect(self._trigger_combat_analysis)
+        self._combat_panel.refresh_clicked.connect(self._trigger_card_analysis)
         cw_layout.addWidget(self._combat_panel)
         self._combat_wrap.setVisible(False)
         root.addWidget(self._combat_wrap)
