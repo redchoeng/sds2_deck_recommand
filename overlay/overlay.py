@@ -11,7 +11,21 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-_LOG_PATH = Path(__file__).parent / "ocr_debug.log"
+def _bundle_dir() -> Path:
+    """PyInstaller 번들이면 _internal, 아니면 스크립트 위치"""
+    if getattr(sys, 'frozen', False):
+        return Path(sys._MEIPASS)
+    return Path(__file__).parent
+
+def _exe_dir() -> Path:
+    """실행 파일 옆 디렉토리 (deck.json 같은 쓰기 가능 파일용)"""
+    if getattr(sys, 'frozen', False):
+        return Path(sys.executable).parent
+    return Path(__file__).parent
+
+_BUNDLE = _bundle_dir()
+_EXE_DIR = _exe_dir()
+_LOG_PATH = _EXE_DIR / "ocr_debug.log"
 
 def _log(msg: str):
     line = f"{datetime.datetime.now().strftime('%H:%M:%S')} {msg}\n"
@@ -30,8 +44,8 @@ import claude_ocr
 
 TIER_COLORS  = {"S": "#e84057", "A": "#ff8c00", "B": "#2ecc71", "C": "#5b9bd5", "D": "#888", "F": "#555"}
 ACTION_COLORS = {"pick": "#2ecc71", "skip": "#e84057"}
-CARDS_PATH = Path(__file__).parent / "cards.json"
-DECK_PATH  = Path(__file__).parent / "deck.json"
+CARDS_PATH = _BUNDLE / "cards.json"
+DECK_PATH  = _EXE_DIR / "deck.json"
 
 STARTING_DECKS = {
     "IC": ["타격"] * 4 + ["수비"] * 4 + ["강타"],
@@ -620,8 +634,8 @@ class CombatPanel(QFrame):
 class OverlayWindow(QWidget):
     def __init__(self):
         super().__init__()
-        self.engine      = RecommendEngine("cards.json")
-        self.matcher     = CardMatcher("cards.json")
+        self.engine      = RecommendEngine(str(CARDS_PATH))
+        self.matcher     = CardMatcher(str(CARDS_PATH))
         self._screen     = ScreenCapture()   # Claude OCR 폴백용 캡처
         claude_ocr.init()                    # .api_key 파일 또는 환경변수 자동 로드
         self.current_deck: list[str] = self._load_deck()
@@ -866,7 +880,7 @@ class OverlayWindow(QWidget):
             self._refresh_arch()
 
     def _on_tier_changed(self, card_name: str, new_tier: str):
-        self.engine = RecommendEngine("cards.json")
+        self.engine = RecommendEngine(str(CARDS_PATH))
         self._status_label.setText(f"{card_name} → {new_tier} 저장됨")
 
     def _set_panels_visible(self, visible: bool):
