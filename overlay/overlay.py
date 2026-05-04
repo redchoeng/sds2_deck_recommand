@@ -60,9 +60,10 @@ TEXT_MAIN  = "#e8e0d0"
 
 
 class Bridge(QObject):
-    cards_ready   = pyqtSignal(list, str)   # cards, mode
-    status_update = pyqtSignal(str)
-    screen_gone   = pyqtSignal()
+    cards_ready    = pyqtSignal(list, str)   # cards, mode
+    status_update  = pyqtSignal(str)
+    screen_gone    = pyqtSignal()
+    combat_ready   = pyqtSignal(dict, str)   # state, rec_text
 
 bridge = Bridge()
 
@@ -531,6 +532,90 @@ class DeckPanel(QFrame):
         self._deck_label.setText("  ".join(deck) if deck else "비어있음")
 
 
+# ── 전투 분석 패널 ───────────────────────────────────────────────────────────
+class CombatPanel(QFrame):
+    refresh_clicked = pyqtSignal()
+
+    def __init__(self):
+        super().__init__()
+        self.setStyleSheet(f"QFrame{{background:{PANEL_BG};border-radius:6px;}}")
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(8, 6, 8, 6)
+        layout.setSpacing(4)
+
+        hdr = QHBoxLayout()
+        title = QLabel("⚔ 전투 분석")
+        title.setStyleSheet("color:#e84057;font-size:11px;font-weight:bold;")
+        hdr.addWidget(title)
+        hdr.addStretch()
+        refresh_btn = QPushButton("↺")
+        refresh_btn.setFixedSize(20, 20)
+        refresh_btn.setToolTip("다시 분석")
+        refresh_btn.setStyleSheet(
+            f"QPushButton{{background:transparent;color:{TEXT_DIM};border:1px solid {DIVIDER};"
+            f"border-radius:3px;font-size:12px;}}"
+            f"QPushButton:hover{{color:{TEXT_MAIN};}}"
+        )
+        refresh_btn.clicked.connect(self.refresh_clicked)
+        hdr.addWidget(refresh_btn)
+        layout.addLayout(hdr)
+
+        self._state_label = QLabel("분석 대기 중...")
+        self._state_label.setWordWrap(True)
+        self._state_label.setStyleSheet(f"color:{TEXT_DIM};font-size:10px;")
+        layout.addWidget(self._state_label)
+
+        sep = QFrame()
+        sep.setFrameShape(QFrame.Shape.HLine)
+        sep.setStyleSheet(f"background:{DIVIDER};max-height:1px;")
+        layout.addWidget(sep)
+
+        rec_scroll = QScrollArea()
+        rec_scroll.setWidgetResizable(True)
+        rec_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        rec_scroll.setStyleSheet("QScrollArea{border:none;background:transparent;}")
+        rec_scroll.setMaximumHeight(240)
+        self._rec_label = QLabel("—")
+        self._rec_label.setWordWrap(True)
+        self._rec_label.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+        self._rec_label.setStyleSheet(f"color:{TEXT_MAIN};font-size:10px;padding:2px;")
+        rec_scroll.setWidget(self._rec_label)
+        layout.addWidget(rec_scroll)
+
+    def set_loading(self):
+        self._state_label.setText("Gemini 분석 중...")
+        self._state_label.setStyleSheet("color:#f39c12;font-size:10px;")
+        self._rec_label.setText("...")
+
+    def set_result(self, state: dict | None, rec: str):
+        if state:
+            energy = f"E:{state.get('energy')}/{state.get('energy_max')}"
+            hp = f"HP:{state.get('player_hp')}/{state.get('player_hp_max')}"
+            block = f"방어:{state.get('player_block', 0)}"
+            enemy_strs = []
+            for i, e in enumerate(state.get("enemies", [])):
+                name = e.get("name") or f"적{i+1}"
+                if e.get("intent") == "attack":
+                    intent = f"⚔{e.get('intent_value', '?')}"
+                else:
+                    intent = str(e.get("intent", "?"))[:6]
+                enemy_strs.append(f"{name} {e.get('hp')}/{e.get('hp_max')} ({intent})")
+            self._state_label.setText(
+                f"{energy}  {hp}  {block}\n" + "  ".join(enemy_strs)
+            )
+            self._state_label.setStyleSheet(f"color:{TEXT_DIM};font-size:10px;")
+        else:
+            self._state_label.setText("화면 인식 실패")
+            self._state_label.setStyleSheet("color:#e84057;font-size:10px;")
+        self._rec_label.setText(rec)
+
+    def set_error(self, msg: str):
+        self._state_label.setText(f"오류: {msg}")
+        self._state_label.setStyleSheet("color:#e84057;font-size:10px;")
+        self._rec_label.setText("—")
+
+
 # ── 메인 오버레이 창 ──────────────────────────────────────────────────────────
 class OverlayWindow(QWidget):
     def __init__(self):
@@ -540,6 +625,17 @@ class OverlayWindow(QWidget):
         self._screen     = ScreenCapture()   # Claude OCR 폴백용 캡처
         claude_ocr.init()                    # .api_key 파일 또는 환경변수 자동 로드
         self.current_deck: list[str] = self._load_deck()
+
+        # Gemini 전투 분석 초기화
+        self._gemini_ready = False
+        try:
+            import gemini_client
+            import combat_recommender
+            gemini_client.init()
+            combat_recommender.set_engine(self.engine)
+            self._gemini_ready = True
+        except Exception as e:
+            _log(f"[Gemini] 초기화 실패: {e}")
 
         self.setWindowTitle("STS2 Overlay")
         self.setWindowFlags(
@@ -602,6 +698,19 @@ class OverlayWindow(QWidget):
         self._toggle_btn.clicked.connect(self._toggle_panels)
         hdr.addWidget(self._toggle_btn)
 
+        # 카드 분석 버튼 (Gemini Vision)
+        self._card_analysis_btn = QPushButton("★")
+        self._card_analysis_btn.setFixedSize(24, 24)
+        self._card_analysis_btn.setToolTip("카드 분석 (Gemini — 현재 화면 캡처)")
+        self._card_analysis_btn.setStyleSheet(
+            f"QPushButton{{background:transparent;color:{GOLD};border:none;font-size:13px;}}"
+            f"QPushButton:hover{{color:#ffd700;}}"
+            f"QPushButton:disabled{{color:#555;}}"
+        )
+        self._card_analysis_btn.setEnabled(self._gemini_ready)
+        self._card_analysis_btn.clicked.connect(self._trigger_card_analysis)
+        hdr.addWidget(self._card_analysis_btn)
+
         # 캘리브레이션 버튼
         cal_btn = QPushButton("⚙")
         cal_btn.setFixedSize(24, 24)
@@ -632,6 +741,17 @@ class OverlayWindow(QWidget):
             f"background:{HEADER_BG};border-bottom:1px solid {DIVIDER};"
         )
         root.addWidget(self._status_label)
+
+        # ── 전투 패널 (기본 숨김) ────────────────────────────────────────────────
+        self._combat_wrap = QWidget()
+        self._combat_wrap.setStyleSheet("background:transparent;")
+        cw_layout = QVBoxLayout(self._combat_wrap)
+        cw_layout.setContentsMargins(6, 2, 6, 2)
+        self._combat_panel = CombatPanel()
+        self._combat_panel.refresh_clicked.connect(self._trigger_combat_analysis)
+        cw_layout.addWidget(self._combat_panel)
+        self._combat_wrap.setVisible(False)
+        root.addWidget(self._combat_wrap)
 
         # ── 카드 목록 (스크롤) ────────────────────────────────────────────────
         self._card_scroll = QScrollArea()
@@ -682,6 +802,7 @@ class OverlayWindow(QWidget):
         bridge.cards_ready.connect(self._on_cards)
         bridge.status_update.connect(self._on_status)
         bridge.screen_gone.connect(self._on_screen_gone)
+        bridge.combat_ready.connect(self._on_combat_result)
 
         screen = QApplication.primaryScreen().geometry()
         self.move(screen.width() - 270, 60)
@@ -894,6 +1015,39 @@ class OverlayWindow(QWidget):
             self._save_deck()
             self._deck_panel.update_deck(self.current_deck)
             self._refresh_arch()
+
+    def _trigger_card_analysis(self):
+        if not self._gemini_ready:
+            self._status_label.setText("Gemini 키 없음 — .api_key 확인")
+            return
+        self._status_label.setText("Gemini 분석 중...")
+        self._card_analysis_btn.setEnabled(False)
+        import threading
+        threading.Thread(target=self._card_analysis_worker, daemon=True).start()
+
+    def _card_analysis_worker(self):
+        try:
+            import mss
+            from PIL import Image
+            with mss.mss() as sct:
+                mon = sct.monitors[1] if len(sct.monitors) > 1 else sct.monitors[0]
+                shot = sct.grab(mon)
+                img = Image.frombytes("RGB", shot.size, shot.bgra, "raw", "BGRX")
+            import card_parser
+            result = card_parser.parse(img)
+            if result and result.get("cards"):
+                mode = result.get("mode") or "reward"
+                bridge.cards_ready.emit(result["cards"], mode)
+                bridge.status_update.emit(f"[Gemini] {' / '.join(result['cards'])}")
+            else:
+                bridge.status_update.emit("카드 선택 화면을 찾지 못했습니다")
+        except Exception as e:
+            bridge.status_update.emit(f"Gemini 오류: {e}")
+        finally:
+            bridge.combat_ready.emit({}, "")  # 버튼 재활성화용 신호 재활용
+
+    def _on_combat_result(self, state: dict, rec: str):
+        self._card_analysis_btn.setEnabled(True)
 
     def _open_calibrate(self):
         import subprocess
