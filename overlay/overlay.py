@@ -884,6 +884,8 @@ class OverlayWindow(QWidget):
             self._save_deck()
             self._deck_panel.update_deck(self.current_deck)
             self._refresh_arch()
+        from PyQt6.QtCore import QTimer
+        QTimer.singleShot(1200, self._on_screen_gone)
 
     def _on_tier_changed(self, card_name: str, new_tier: str):
         self.engine = RecommendEngine(str(CARDS_PATH))
