@@ -879,13 +879,28 @@ class OverlayWindow(QWidget):
         self.adjustSize()
 
     def _on_pick(self, card_name: str):
+        from PyQt6.QtCore import QTimer
         if card_name not in self.current_deck:
             self.current_deck.append(card_name)
             self._save_deck()
             self._deck_panel.update_deck(self.current_deck)
             self._refresh_arch()
-        from PyQt6.QtCore import QTimer
-        QTimer.singleShot(1200, self._on_screen_gone)
+
+        if self._current_mode == "shop":
+            # 구매한 카드 제외하고 나머지 재평가
+            remaining = [c for c in self._last_valid_cards if c != card_name]
+            if remaining:
+                recs = self.engine.recommend(self.current_deck, CardChoice(cards=remaining, mode="shop"))
+                if any(r.action == "pick" for r in recs):
+                    # 아직 살 카드 있음 → 업데이트
+                    self._last_valid_cards = remaining
+                    bridge.cards_ready.emit(remaining, "shop")
+                    return
+            # 살 카드 없음 → 대기
+            QTimer.singleShot(800, self._on_screen_gone)
+        else:
+            # 보상: 뽑으면 대기
+            QTimer.singleShot(1200, self._on_screen_gone)
 
     def _on_tier_changed(self, card_name: str, new_tier: str):
         self.engine = RecommendEngine(str(CARDS_PATH))
