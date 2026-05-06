@@ -197,6 +197,9 @@ class RecommendEngine:
         if not scored: return None
         top = scored[0]
         min_score = 26 if stage == "early" else 34
+        # must 카드 없으면 rec만으로 빌드 확정하지 않도록 임계값 상향
+        if top["mh"] == 0:
+            min_score += 60
         return top["arch"] if top["score"] >= min_score else None
 
     def _get_build_commit_level(self, arch: Optional[dict], deck: list[str]) -> int:
@@ -418,6 +421,10 @@ class RecommendEngine:
         results = []
         for card_name in choice.cards:
             info = self._score_card(card_name, deck, char or "IC", active_arch, stage, is_boss, hist)
+            in_build = active_arch and (
+                _list_has(active_arch.get("must", []), card_name) or
+                _list_has(active_arch.get("rec", []), card_name)
+            )
             results.append(Recommendation(
                 card_name=card_name,
                 action="pick",
@@ -425,7 +432,7 @@ class RecommendEngine:
                 reason=" / ".join(info["reasons"]),
                 summary=info["summary"],
                 chips=info["chips"],
-                arch_name=active_arch["name"] if active_arch else None,
+                arch_name=active_arch["name"] if in_build else None,
             ))
 
         results.sort(key=lambda r: r.score, reverse=True)
@@ -471,6 +478,8 @@ class RecommendEngine:
                     return _build_status(e)
         min_score = 26 if stage == "early" else 34
         top = all_scored[0]
+        if top["mh"] == 0:
+            min_score += 60
         if top["score"] < min_score:
             return None
         return _build_status(top)
