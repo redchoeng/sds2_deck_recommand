@@ -100,12 +100,18 @@ class CardMatcher:
 
         return None, 0
 
+    @staticmethod
+    def _strip_upgrade(text: str) -> str:
+        """강화 카드 표시 제거: '타격+' → '타격', '타격+2' → '타격'"""
+        import re
+        return re.sub(r'\+\d*$', '', text.strip())
+
     def match(self, ocr_text: str, threshold: int = 50, jamo_threshold: int = 65,
               char: str | None = None) -> str | None:
         """OCR 텍스트를 카드명으로 매칭.
         char 지정 시 해당 캐릭터 + 공용 카드만 후보로 사용.
         """
-        ocr_norm = ocr_text.strip().replace(" ", "")
+        ocr_norm = self._strip_upgrade(ocr_text).replace(" ", "")
         if not ocr_norm:
             return None
         indices = self._indices_for(char)
@@ -129,7 +135,7 @@ class CardMatcher:
         for text in candidates:
             if not text:
                 continue
-            norm = text.strip().replace(" ", "")
+            norm = self._strip_upgrade(text).replace(" ", "")
             name, score = self._match_with_indices(norm, indices, threshold, jamo_threshold)
             if name and score > best_score:
                 best_score = score
@@ -140,7 +146,7 @@ class CardMatcher:
             for text in candidates:
                 if not text:
                     continue
-                norm = text.strip().replace(" ", "")
+                norm = self._strip_upgrade(text).replace(" ", "")
                 name, score = self._match_with_indices(norm, None, threshold, jamo_threshold)
                 if name and score > best_score:
                     best_score = score

@@ -19,6 +19,7 @@ PROMPT = """
 - 상점 화면: mode = "shop"
 - 해당 화면이 아님: mode = null, cards = []
 - 카드명은 한국어로 추출
+- 강화된 카드(이름 끝에 + 표시)는 + 없이 기본 이름만 반환 (예: "타격+" → "타격")
 - JSON만 출력, 설명 금지
 """
 
@@ -35,6 +36,8 @@ def parse(img: Image.Image) -> dict | None:
         result = json.loads(text.strip())
         if not isinstance(result.get("cards"), list):
             return None
+        import re
+        result["cards"] = [re.sub(r'\+\d*$', '', c.strip()) for c in result["cards"]]
         return result
     except json.JSONDecodeError:
         return None
