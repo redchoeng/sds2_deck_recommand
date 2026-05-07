@@ -1027,7 +1027,7 @@ class OverlayWindow(QWidget):
             self._title_label.setText("STS2 추천")
             self._title_label.setStyleSheet(f"color:{GOLD};font-size:12px;font-weight:bold;")
 
-        recs = self.engine.recommend(self.current_deck, CardChoice(cards=offered))
+        recs = self.engine.recommend(self.current_deck, CardChoice(cards=offered, mode=mode))
         for i, rec in enumerate(recs):
             w = CardWidget(rec, i, mode=mode)
             w.picked.connect(self._on_pick)
